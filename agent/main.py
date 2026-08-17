@@ -3,9 +3,6 @@ import secrets
 import logging
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
-import uvicorn
 
 from agent.executor import discover_commands, execute_command
 
