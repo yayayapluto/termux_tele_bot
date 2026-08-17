@@ -116,7 +116,7 @@ It should look like:
 Test from the bot machine:
 
 ```bash
-curl http://100.x.y.z:8787/health
+curl http://100.93.252.94:8787/health
 ```
 
 Do NOT port-forward the agent to the public internet.
@@ -222,7 +222,7 @@ Termux agent listening on 100.x.y.z:8787
 Health check:
 
 ```bash
-curl http://100.x.y.z:8787/health
+curl http://100.93.252.94:8787/health
 ```
 
 Expected JSON:

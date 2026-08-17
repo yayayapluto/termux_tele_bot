@@ -18,6 +18,11 @@ from bot.termux_client import discover, execute, health
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
+WELCOME_TEXT = (
+    "📱 *Termux Remote*\n\n"
+    "Pilih aksi yang ingin dijalankan."
+)
+
 
 def allowed(update: Update) -> bool:
     user = update.effective_user
@@ -39,13 +44,23 @@ def fmt_result(data: dict) -> str:
     return text[:3900]
 
 
+def user_label(update: Update) -> str:
+    user = update.effective_user
+    if not user:
+        return "unknown"
+    return f"{user.id} ({user.username or user.full_name})"
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
+        log.warning("Unauthorized /start from %s", user_label(update))
         await update.message.reply_text("⛔ Unauthorized.")
         return
 
+    log.info("/start by %s", user_label(update))
+
     await update.message.reply_text(
-        "📱 *Termux Remote*\\n\\nChoose an action:",
+        WELCOME_TEXT,
         parse_mode="Markdown",
         reply_markup=main_menu(),
     )
@@ -53,47 +68,66 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
+        log.warning("Unauthorized /run from %s", user_label(update))
         await update.message.reply_text("⛔ Unauthorized.")
         return
 
     raw = update.message.text.partition(" ")[2].strip()
     if not raw:
-        await update.message.reply_text("Usage: `/run <command> [args...]`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Format perintah belum lengkap.\n"
+            "Gunakan: `/run <command> [args...]`",
+            parse_mode="Markdown",
+        )
         return
 
     try:
         parts = shlex.split(raw)
     except ValueError as exc:
+        log.info("Invalid shell syntax from %s: %s", user_label(update), exc)
         await update.message.reply_text(f"❌ Invalid shell syntax: {exc}")
         return
 
     command, args = parts[0], parts[1:]
-    await update.message.reply_text(f"⏳ Running `{command}`...", parse_mode="Markdown")
+    log.info("/run requested by %s: %s args=%s", user_label(update), command, args)
+    await update.message.reply_text(
+        f"⏳ Menjalankan `{command}`...",
+        parse_mode="Markdown",
+    )
     try:
         result = await execute(command, args)
+        log.info(
+            "Command result for %s: %s exit_code=%s",
+            user_label(update),
+            command,
+            result.get("exit_code"),
+        )
         await update.message.reply_text(fmt_result(result), parse_mode="Markdown")
     except Exception as exc:
+        log.exception("Agent error while /run %s by %s", command, user_label(update))
         await update.message.reply_text(f"❌ Agent error: `{exc}`", parse_mode="Markdown")
 
 
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not allowed(update):
+        log.warning("Unauthorized callback from %s", user_label(update))
         await query.answer("Unauthorized", show_alert=True)
         return
 
     await query.answer()
     data = query.data
+    log.info("Callback by %s: %s", user_label(update), data)
 
     if data == "home":
-        await query.edit_message_text("📱 *Termux Remote*\\n\\nChoose an action:",
+        await query.edit_message_text(WELCOME_TEXT,
                                       parse_mode="Markdown", reply_markup=main_menu())
         return
 
     if data == "custom":
         await query.edit_message_text(
             "💻 *Custom Command*\\n\\n"
-            "Send a message like:\\n"
+            "Kirim perintah dengan format:\\n"
             "`/run uptime`\\n"
             "`/run ls -lah`\\n"
             "`/run termux-battery-status`",
@@ -107,11 +141,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await discover()
             count = len(result.get("commands", []))
             await query.edit_message_text(
-                f"🔄 Discovered `{count}` Termux commands.",
+                f"🔄 Berhasil memuat `{count}` command Termux.",
                 parse_mode="Markdown",
                 reply_markup=main_menu(),
             )
+            log.info("Refresh commands by %s count=%s", user_label(update), count)
         except Exception as exc:
+            log.exception("Refresh failed for %s", user_label(update))
             await query.edit_message_text(f"❌ Refresh failed: `{exc}`",
                                           parse_mode="Markdown",
                                           reply_markup=main_menu())
@@ -122,18 +158,20 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await discover()
         installed = set(result.get("commands", []))
         if category not in CATEGORIES:
-            await query.edit_message_text("Unknown category.", reply_markup=main_menu())
+            log.warning("Unknown category '%s' from %s", category, user_label(update))
+            await query.edit_message_text("Kategori tidak dikenal.", reply_markup=main_menu())
             return
         title = CATEGORIES[category][0]
         await query.edit_message_text(
-            f"{title}\\n\\nChoose an API:",
+            f"{title}\\n\\nPilih API yang ingin dijalankan:",
             reply_markup=category_menu(category, installed),
         )
         return
 
     if data.startswith("api:"):
         command = data.split(":", 1)[1]
-        await query.edit_message_text(f"⏳ Running `{command}`...", parse_mode="Markdown")
+        log.info("API command by %s: %s", user_label(update), command)
+        await query.edit_message_text(f"⏳ Menjalankan `{command}`...", parse_mode="Markdown")
         try:
             result = await execute(command)
             await query.edit_message_text(
@@ -141,7 +179,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=main_menu(),
             )
+            log.info("API command result for %s: %s exit_code=%s", user_label(update), command, result.get("exit_code"))
         except Exception as exc:
+            log.exception("API command failed for %s: %s", user_label(update), command)
             await query.edit_message_text(
                 f"❌ `{command}` failed:\\n`{exc}`",
                 parse_mode="Markdown",
@@ -151,13 +191,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
+        log.warning("Unauthorized /status from %s", user_label(update))
         await update.message.reply_text("⛔ Unauthorized.")
         return
     try:
         result = await health()
-        await update.message.reply_text(f"🟢 Agent OK: `{result}`", parse_mode="Markdown")
+        log.info("/status OK for %s: %s", user_label(update), result)
+        await update.message.reply_text(f"🟢 Agent terhubung: `{result}`", parse_mode="Markdown")
     except Exception as exc:
-        await update.message.reply_text(f"🔴 Agent unreachable: `{exc}`")
+        log.exception("/status failed for %s", user_label(update))
+        await update.message.reply_text(f"🔴 Agent tidak terjangkau: `{exc}`")
 
 
 def main():
@@ -165,6 +208,8 @@ def main():
         raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
     if not ALLOWED_USER_IDS:
         raise RuntimeError("ALLOWED_USER_IDS is empty")
+
+    log.info("Starting bot with %s allowed user(s)", len(ALLOWED_USER_IDS))
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
