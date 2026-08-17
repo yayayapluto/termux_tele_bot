@@ -2,6 +2,8 @@ import logging
 import shlex
 
 from telegram import Update
+from telegram.constants import ParseMode
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -20,7 +22,7 @@ log = logging.getLogger(__name__)
 
 WELCOME_TEXT = (
     "📱 *Termux Remote*\n\n"
-    "Pilih aksi yang ingin dijalankan."
+    "Pilih aksi yang ingin dijalankan"
 )
 
 
@@ -29,18 +31,32 @@ def allowed(update: Update) -> bool:
     return bool(user and user.id in ALLOWED_USER_IDS)
 
 
+def mdv2(text: object) -> str:
+    return escape_markdown(str(text), version=2)
+
+
+def inline_code(text: object) -> str:
+    escaped = escape_markdown(str(text), version=2, entity_type="code")
+    return f"`{escaped}`"
+
+
+def pre_block(text: object) -> str:
+    escaped = escape_markdown(str(text), version=2, entity_type="pre")
+    return f"```\n{escaped}\n```"
+
+
 def fmt_result(data: dict) -> str:
     stdout = (data.get("stdout") or "").strip()
     stderr = (data.get("stderr") or "").strip()
     code = data.get("exit_code", "?")
 
-    text = f"Exit code: `{code}`\n"
+    text = f"Exit code: {inline_code(code)}"
     if stdout:
-        text += f"\n```text\n{stdout}\n```"
+        text += f"\n\nstdout:\n{pre_block(stdout)}"
     if stderr:
-        text += f"\n\nstderr:\n```text\n{stderr}\n```"
+        text += f"\n\nstderr:\n{pre_block(stderr)}"
     if not stdout and not stderr:
-        text += "\n_No output._"
+        text += "\n\nNo output"
     return text[:3900]
 
 
@@ -54,14 +70,14 @@ def user_label(update: Update) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         log.warning("Unauthorized /start from %s", user_label(update))
-        await update.message.reply_text("⛔ Unauthorized.")
+        await update.message.reply_text("⛔ Unauthorized", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     log.info("/start by %s", user_label(update))
 
     await update.message.reply_text(
         WELCOME_TEXT,
-        parse_mode="Markdown",
+        parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=main_menu(),
     )
 
@@ -69,15 +85,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         log.warning("Unauthorized /run from %s", user_label(update))
-        await update.message.reply_text("⛔ Unauthorized.")
+        await update.message.reply_text("⛔ Unauthorized", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     raw = update.message.text.partition(" ")[2].strip()
     if not raw:
         await update.message.reply_text(
-            "Format perintah belum lengkap.\n"
+            "Format perintah belum lengkap\n"
             "Gunakan: `/run <command> [args...]`",
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
@@ -85,14 +101,17 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = shlex.split(raw)
     except ValueError as exc:
         log.info("Invalid shell syntax from %s: %s", user_label(update), exc)
-        await update.message.reply_text(f"❌ Invalid shell syntax: {exc}")
+        await update.message.reply_text(
+            f"❌ Invalid shell syntax: {inline_code(exc)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
         return
 
     command, args = parts[0], parts[1:]
     log.info("/run requested by %s: %s args=%s", user_label(update), command, args)
     await update.message.reply_text(
-        f"⏳ Menjalankan `{command}`...",
-        parse_mode="Markdown",
+        f"⏳ Menjalankan {inline_code(command)}",
+        parse_mode=ParseMode.MARKDOWN_V2,
     )
     try:
         result = await execute(command, args)
@@ -102,10 +121,13 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             command,
             result.get("exit_code"),
         )
-        await update.message.reply_text(fmt_result(result), parse_mode="Markdown")
+        await update.message.reply_text(fmt_result(result), parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as exc:
         log.exception("Agent error while /run %s by %s", command, user_label(update))
-        await update.message.reply_text(f"❌ Agent error: `{exc}`", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ Agent error: {inline_code(exc)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
 
 
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,17 +143,17 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "home":
         await query.edit_message_text(WELCOME_TEXT,
-                                      parse_mode="Markdown", reply_markup=main_menu())
+                                      parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu())
         return
 
     if data == "custom":
         await query.edit_message_text(
-            "💻 *Custom Command*\\n\\n"
-            "Kirim perintah dengan format:\\n"
-            "`/run uptime`\\n"
-            "`/run ls -lah`\\n"
+            "💻 *Custom Command*\n\n"
+            "Kirim perintah dengan format:\n"
+            "`/run uptime`\n"
+            "`/run ls -lah`\n"
             "`/run termux-battery-status`",
-            parse_mode="Markdown",
+            parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=main_menu(),
         )
         return
@@ -141,15 +163,15 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await discover()
             count = len(result.get("commands", []))
             await query.edit_message_text(
-                f"🔄 Berhasil memuat `{count}` command Termux.",
-                parse_mode="Markdown",
+                f"🔄 Berhasil memuat {inline_code(count)} command Termux",
+                parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=main_menu(),
             )
             log.info("Refresh commands by %s count=%s", user_label(update), count)
         except Exception as exc:
             log.exception("Refresh failed for %s", user_label(update))
-            await query.edit_message_text(f"❌ Refresh failed: `{exc}`",
-                                          parse_mode="Markdown",
+            await query.edit_message_text(f"❌ Refresh failed: {inline_code(exc)}",
+                                          parse_mode=ParseMode.MARKDOWN_V2,
                                           reply_markup=main_menu())
         return
 
@@ -159,11 +181,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         installed = set(result.get("commands", []))
         if category not in CATEGORIES:
             log.warning("Unknown category '%s' from %s", category, user_label(update))
-            await query.edit_message_text("Kategori tidak dikenal.", reply_markup=main_menu())
+            await query.edit_message_text("Kategori tidak dikenal", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu())
             return
         title = CATEGORIES[category][0]
         await query.edit_message_text(
-            f"{title}\\n\\nPilih API yang ingin dijalankan:",
+            f"{mdv2(title)}\n\nPilih API yang ingin dijalankan:",
+            parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=category_menu(category, installed),
         )
         return
@@ -171,20 +194,23 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("api:"):
         command = data.split(":", 1)[1]
         log.info("API command by %s: %s", user_label(update), command)
-        await query.edit_message_text(f"⏳ Menjalankan `{command}`...", parse_mode="Markdown")
+        await query.edit_message_text(
+            f"⏳ Menjalankan {inline_code(command)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
         try:
             result = await execute(command)
             await query.edit_message_text(
-                f"🛠 `{command}`\\n\\n{fmt_result(result)}",
-                parse_mode="Markdown",
+                f"🛠 {inline_code(command)}\n\n{fmt_result(result)}",
+                parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=main_menu(),
             )
             log.info("API command result for %s: %s exit_code=%s", user_label(update), command, result.get("exit_code"))
         except Exception as exc:
             log.exception("API command failed for %s: %s", user_label(update), command)
             await query.edit_message_text(
-                f"❌ `{command}` failed:\\n`{exc}`",
-                parse_mode="Markdown",
+                f"❌ {inline_code(command)} failed:\n{inline_code(exc)}",
+                parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=main_menu(),
             )
 
@@ -192,15 +218,21 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         log.warning("Unauthorized /status from %s", user_label(update))
-        await update.message.reply_text("⛔ Unauthorized.")
+        await update.message.reply_text("⛔ Unauthorized", parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         result = await health()
         log.info("/status OK for %s: %s", user_label(update), result)
-        await update.message.reply_text(f"🟢 Agent terhubung: `{result}`", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"🟢 Agent terhubung: {inline_code(result)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
     except Exception as exc:
         log.exception("/status failed for %s", user_label(update))
-        await update.message.reply_text(f"🔴 Agent tidak terjangkau: `{exc}`")
+        await update.message.reply_text(
+            f"🔴 Agent tidak terjangkau: {inline_code(exc)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
 
 
 def main():
